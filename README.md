@@ -1,4 +1,4 @@
-# Minimac4ImputationAssessment
+# Minimac4 Imputation Assessment
 Imputation of GWAS data with a reference panel using Minimac4. An assessment of the imputation accuracy is also performed.
 
 Input: target file in vcf format, reference file in vcf format
