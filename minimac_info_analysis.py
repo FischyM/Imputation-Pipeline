@@ -12,32 +12,14 @@ import matplotlib.pyplot as plt
 
 def setUp():
     infoFile = sys.argv[1] # take in the .info file
-    pkl = infoFile[:-4] + 'pkl.gz'
+    df = pd.read_csv(infoFile, header=0, sep='\t')
 
+    print('Retyping column data to float type')
+    df[['AvgCall','Rsq', 'LooRsq', 'EmpR', 'EmpRsq', 'Dose0', 'Dose1']] = \
+        df[['AvgCall', 'Rsq', 'LooRsq', 'EmpR', 'EmpRsq', 'Dose0', 'Dose1']].apply(pd.to_numeric, \
+        errors='coerce')
 
-    # perhaps put in option to turn pickle on and off? Or remove it when ready to publish
-
-
-    if os.path.isfile(pkl): # if we have the pickle file, load that instead (much faster)
-        print('\nPickle file found, loading pickle file')
-        df = pd.read_pickle(pkl)
-        print('Done loading\n')
-
-        return df
-    else:
-        print('\npickle file not found, reading in .info')
-        df = pd.read_csv(infoFile, header=0, sep='\t')
-
-        print('Retyping column data to float type')
-        df[['AvgCall','Rsq', 'LooRsq', 'EmpR', 'EmpRsq', 'Dose0', 'Dose1']] = \
-            df[['AvgCall', 'Rsq', 'LooRsq', 'EmpR', 'EmpRsq', 'Dose0', 'Dose1']].apply(pd.to_numeric, \
-            errors='coerce')
-
-        # create pickle file for subsequent runs and changes to this program
-        print( 'Saving to pickle for future uses\n')
-        df.to_pickle(pkl)
-
-        return df
+    return df
 
 def printRsqEmpRsq(df, countGeno):
     print('\tRsq: {}'.format(round(df['Rsq'].mean(), 4)))
@@ -61,7 +43,7 @@ def printRsq(df, coutnTotal):
     print('\tRatio of snps: {}'.format(round(ratio, 4)))
 
 
-if __name__ == '__main__':
+def main():
     df = setUp()
 
     coutnTotal = len(df.index)
@@ -120,3 +102,7 @@ if __name__ == '__main__':
     plt.savefig('hist_ALL.Rsq_MAF_GT_5.png')
 
     rsqCutoffs(AllMafGreater_5)
+
+
+if __name__ == '__main__':
+    main()
