@@ -1,15 +1,14 @@
 #!/usr/bin/enc python3
 # Copyright Mathew Fischbach, Myers Lab http://csbio.cs.umn.edu/, 2020
-# code based on the work of Xiaotong Liu from Myers Lab
+# Code based on the work of Xiaotong Liu from Myers Lab
 
-# Purpose:
-# This program will take plink files and impute them with Minimac4.
-# Analysis of the imputation will be done by minimac_info_analysis.py
-# This program imputes on a single chromosome at a time. A simple bash script can
-# be created to impute chromosomes 1 through 22
+### Purpose:
+# This program will take GWAS vcf files and impute them with Minimac4. An analysis of the
+# imputation accuracy is performed.
 
-# Requirements: 
-# Input: vcf file containing target data and vcf reference panel
+### Requirements: 
+# Input: vcf containing target data and vcf reference panel, both GRCh38 build
+# Output: analysis_output.csv (tab-delimited) and per chromosome imputed files in output directory
 
 import sys
 import argparse
@@ -17,12 +16,11 @@ import os
 import subprocess
 import json
 import csv
-
+from collections import OrderedDict
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-startDir = os.getcwd()
 
 def setUp(argv, targetFileName, refFileName, cpus):
     print('\nChecking input')
@@ -102,6 +100,7 @@ def checkPrograms():
     print('Successful, all programs/directories are present\n')
 
 def separateFile(file, type):
+    
     print('beginning to separate {f}'.format(f=file))
     if file[-2:] == 'gz':
         command = ['htsfile ' + file]
@@ -132,7 +131,7 @@ def separateFile(file, type):
         runCommandLine(['bgzip ' + file])
         print('indexing vcf.gz file with tabix')
         runCommandLine(['tabix -f -p vcf ' + filegz])
-    
+    startDir = os.getcwd()
     os.chdir(startDir + '/beforePhasing/' + type)
     print('separating chromosomes')
     for i in range(1,23):
@@ -180,7 +179,7 @@ def convertRef(chr, cpu):
     # outputs as .m3vcf.gz
 
 def impute(chr, cpu):
-    # shouldn't need --ignore-duplicates since that was taken care of
+    print('\nBeginning Minimac4 Imputation')
     toCommandLine = ['minimac4 \
         --haps afterPhasing/tar/prePhasedChr' + chr + '.vcf.gz \
         --refHaps afterPhasing/ref/chr' + chr + '.m3vcf.gz \
@@ -189,25 +188,20 @@ def impute(chr, cpu):
         --mapFile map/genetic_map_hg38_withX.minimac.txt \
         --cpus ' + cpu]
     runCommandLine(toCommandLine)
-    print('imputation using minimac4 - done')
-
 
 def setUpCompare(infoFile):
-    # infoFile = sys.argv[1] # take in the .info file
     df = pd.read_csv(infoFile, header=0, sep='\t')
-
     df[['AvgCall','Rsq', 'LooRsq', 'EmpR', 'EmpRsq', 'Dose0', 'Dose1']] = \
         df[['AvgCall', 'Rsq', 'LooRsq', 'EmpR', 'EmpRsq', 'Dose0', 'Dose1']].apply(pd.to_numeric, \
         errors='coerce')
-
     return df
 
 def printRsqEmpRsq(df, countGeno, dict_out, maf):
-    dict_out['genotyped snps'][maf]['Rsq'] = round(df['Rsq'].mean(), 4)
-    dict_out['genotyped snps'][maf]['EmpRsq'] = round(df['EmpRsq'].mean(), 4)
-    dict_out['genotyped snps'][maf]['Total snps'] = len(df.index)
+    dict_out['genotyped-snps'][maf]['Rsq'] = round(df['Rsq'].mean(), 4)
+    dict_out['genotyped-snps'][maf]['EmpRsq'] = round(df['EmpRsq'].mean(), 4)
+    dict_out['genotyped-snps'][maf]['Total snps'] = len(df.index)
     ratio = len(df.index)/float(countGeno)
-    dict_out['genotyped snps'][maf]['Ratio of snps'] = round(ratio, 4)
+    dict_out['genotyped-snps'][maf]['Ratio of snps'] = round(ratio, 4)
 
 def rsqCutoffs(mafList, dict_out, type):
     totalSNPs = len(mafList.index)
@@ -218,17 +212,17 @@ def rsqCutoffs(mafList, dict_out, type):
         dict_out[type]['snp ratios at Rsq cutoff'][round(val,2)] = round(newSnps/float(totalSNPs),4)
 
 def printRsq(df, countTotal, dict_out, maf):
-    dict_out['all snps'][maf]['Rsq'] = round(df['Rsq'].mean(), 4)
-    dict_out['all snps'][maf]['Total snps'] = len(df.index)
+    dict_out['all-snps'][maf]['Rsq'] = round(df['Rsq'].mean(), 4)
+    dict_out['all-snps'][maf]['Total snps'] = len(df.index)
     ratio = len(df.index)/float(countTotal)
-    dict_out['all snps'][maf]['Ratio of snps'] = round(ratio, 4)
+    dict_out['all-snps'][maf]['Ratio of snps'] = round(ratio, 4)
 
 
 def compare(infoFile, chr):
-    dict_out = {'genotyped snps': {'MAF <= 0.05%': {}, 'MAF > 0.05% and < 5%': {}, \
-        'MAF >= 5%': {}, 'correlation': None, 'snp ratios at Rsq cutoff': {}}, \
-            'all snps': {'MAF <= 0.05%': {}, 'MAF > 0.05% and < 5%': {}, 'MAF >= 5%': {}, \
-            'snp ratios at Rsq cutoff': {}}}
+    dict_out = {'genotyped-snps': {'MAF <= 0.05%': {}, 'MAF 0.05-5%': {}, \
+        'MAF >= 5%': {}, 'correlation': None, 'snp ratios at Rsq cutoff': OrderedDict()}, \
+            'all-snps': {'MAF <= 0.05%': {}, 'MAF 0.05-5%': {}, 'MAF >= 5%': {}, \
+            'snp ratios at Rsq cutoff': OrderedDict()}}
     df = setUpCompare(infoFile)
     countTotal = len(df.index)
     genotypes = df.loc[(df['Genotyped'] == 'Genotyped')]
@@ -240,24 +234,24 @@ def compare(infoFile, chr):
     mafGreater_5 = df.loc[(df['MAF'] >= 0.05) & (df['Genotyped'] == 'Genotyped')]
 
     printRsqEmpRsq(mafLess_0_05, countGeno, dict_out, 'MAF <= 0.05%')
-    printRsqEmpRsq(maf_0_05_to_5, countGeno, dict_out, 'MAF > 0.05% and < 5%')
+    printRsqEmpRsq(maf_0_05_to_5, countGeno, dict_out, 'MAF 0.05-5%')
     printRsqEmpRsq(mafGreater_5, countGeno, dict_out, 'MAF >= 5%')
 
     #1.b
     corr = mafGreater_5[['Rsq', 'EmpRsq']].corr()
-    dict_out['genotyped snps']['correlation'] = round(corr.iloc[0,1], 4)
+    dict_out['genotyped-snps']['correlation'] = round(corr.iloc[0,1], 4)
 
     mafGreater_5.plot.scatter(x='Rsq', y='EmpRsq', c='Red')
     plt.savefig('output/chr' + chr + '/scatter_Genotypes.EmpRsq.Rsq_MAF_GT_5.png')
 
-    rsqCutoffs(mafGreater_5, dict_out, 'genotyped snps')
+    rsqCutoffs(mafGreater_5, dict_out, 'genotyped-snps')
 
     #2
     AllMafLess_0_05 = df.loc[(df['MAF'] <= 0.0005)]
     printRsq(AllMafLess_0_05, countTotal, dict_out,'MAF <= 0.05%')
 
     AllMaf_0_05_to_5 = df.loc[(df['MAF'] > 0.0005) & (df['MAF'] < 0.05)]
-    printRsq(AllMaf_0_05_to_5, countTotal, dict_out, 'MAF > 0.05% and < 5%')
+    printRsq(AllMaf_0_05_to_5, countTotal, dict_out, 'MAF 0.05-5%')
 
     AllMafGreater_5 = df.loc[(df['MAF'] >= 0.05)]
     printRsq(AllMafGreater_5, countTotal, dict_out, 'MAF >= 5%')
@@ -266,12 +260,24 @@ def compare(infoFile, chr):
     AllMafGreater_5[['Rsq']].plot(kind='hist', bins=100)
     plt.savefig('output/chr' + chr + '/hist_ALL.Rsq_MAF_GT_5.png')
 
-    rsqCutoffs(AllMafGreater_5, dict_out, 'all snps')
+    rsqCutoffs(AllMafGreater_5, dict_out, 'all-snps')
 
     return dict_out
 
-def unpackDict(dictIn):
-    pass
+def writeTSV(dictIn):
+    newDict = OrderedDict(dictIn)
+    with (open('output/analysis_output.csv', 'w')) as f:
+        writer = csv.writer(f, delimiter='\t')
+        for a, b in sorted(newDict.items()):
+            for i, j in sorted(b.items(), reverse=True):
+                for k, l in sorted(j.items()):
+                    tempList = []
+                    if type(l) is not str and type(l) is not float:
+                        for key, val in l.items():
+                            tempList.append(str(key) + ':' + str(val))
+                        writer.writerow([a, i, k] + tempList)
+                    else:
+                        writer.writerow([a, i, k, l])
 
 
 ######################################################################################
@@ -296,16 +302,7 @@ def main():
         infoFile = 'output/chr' + chromosome + '/imputed_chr' + chromosome + '.info'
         if os.path.isfile(infoFile):
             analysisDict['chr' + chromosome] = compare(infoFile, chromosome)
-    with (open('analysis_output.csv', 'w')) as f:
-        writer = csv.writer(f)
-    for x in analysisDict:
-        for y in analysisDict[x]:
-            for z in analysisDict[x][y]:
-                writer.writerow(z)
-    # outJSON = json.dumps(analysisDict)
-    # with open('analysis_output.json', 'w') as f:
-    #     f.write(outJSON)
-        
+        writeTSV(analysisDict)
 if __name__ == '__main__':
     main()
 
