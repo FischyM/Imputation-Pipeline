@@ -1,108 +1,87 @@
-#!/usr/bin/python
+
 # Copyright Mathew Fischbach, Myers Lab http://csbio.cs.umn.edu/, 2020
 # Purpose: analyze the .info file that results from a Minimac4 imputation
 # Requirements: pandas, numpy, matplotlib, python3
-
-
+import json
 import sys
-import os
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-def setUp():
-    infoFile = sys.argv[1] # take in the .info file
+def setUp(infoFile):
+    # infoFile = sys.argv[1] # take in the .info file
     df = pd.read_csv(infoFile, header=0, sep='\t')
 
-    print('Retyping column data to float type')
     df[['AvgCall','Rsq', 'LooRsq', 'EmpR', 'EmpRsq', 'Dose0', 'Dose1']] = \
         df[['AvgCall', 'Rsq', 'LooRsq', 'EmpR', 'EmpRsq', 'Dose0', 'Dose1']].apply(pd.to_numeric, \
         errors='coerce')
 
     return df
 
-def printRsqEmpRsq(df, countGeno):
-    print('\tRsq: {}'.format(round(df['Rsq'].mean(), 4)))
-    print('\tEmpRsq: {}'.format(round(df['EmpRsq'].mean(), 4)))
-    print('\tTotal snps: {}'.format(len(df.index)))
+def printRsqEmpRsq(df, countGeno, dict_out, maf):
+    dict_out['genotyped snps'][maf]['Rsq'] = round(df['Rsq'].mean(), 4)
+    dict_out['genotyped snps'][maf]['EmpRsq'] = format(round(df['EmpRsq'].mean(), 4))
+    dict_out['genotyped snps'][maf]['Total snps'] = format(len(df.index))
     ratio = float(len(df.index)/countGeno)
-    print('\tRatio of snps: {}'.format(round(ratio, 4)))
+    dict_out['genotyped snps'][maf]['Ratio of snps'] = format(round(ratio, 4))
 
-def rsqCutoffs(mafList):
+def rsqCutoffs(mafList, dict_out, type):
     totalSNps = len(mafList.index)
     cutoffs = [0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 0.96, 0.97, 0.98, 0.99]
     for val in cutoffs:
         newMaf = mafList.loc[(mafList['Rsq'] >= val)]
         newSnps = len(newMaf.index)
-        print('\tRatio of snps at rsq cutoff of {value}: {total}'.format(value = round(val,2), total = round((newSnps/totalSNps),4)))
+        dict_out[type]['snp ratios at Rsq cutoff'][round(val,2)] = round((newSnps/totalSNps),4)
 
-def printRsq(df, coutnTotal):
-    print('\tRsq: {}'.format(round(df['Rsq'].mean(), 4)))
-    print('\tTotal snps: {}'.format(len(df.index)))
+def printRsq(df, coutnTotal, dict_out, maf):
+    dict_out['all snps'][maf]['Rsq'] = round(df['Rsq'].mean(), 4)
+    dict_out['all snps'][maf]['Total snps'] = len(df.index)
     ratio = float(len(df.index)/coutnTotal)
-    print('\tRatio of snps: {}'.format(round(ratio, 4)))
+    dict_out['all snps'][maf]['Ratio of snps'] = round(ratio, 4)
 
 
-def main():
-    df = setUp()
-
+def run_compare(infoFile):
+    dict_out = {'genotyped snps': {'MAF <= 0.05%': {}, 'MAF > 0.05% and < 5%': {}, \
+        'MAF >= 5%': {}, 'correlation': None, 'snp ratios at Rsq cutoff': {}}, \
+            'all snps': {'MAF <= 0.05%': {}, 'MAF > 0.05% and < 5%': {}, 'MAF >= 5%': {}, \
+            'snp ratios at Rsq cutoff': {}}}
+    df = setUp(infoFile)
     coutnTotal = len(df.index)
-
     genotypes = df.loc[(df['Genotyped'] == 'Genotyped')]
     countGeno = len(genotypes.index)
-
 
     #1.a
     mafLess_0_05 = df.loc[(df['MAF'] <= 0.0005) & (df['Genotyped'] == 'Genotyped')]
     maf_0_05_to_5 = df.loc[(df['MAF'] > 0.0005) & (df['MAF'] < 0.05) & (df['Genotyped'] == 'Genotyped')]
     mafGreater_5 = df.loc[(df['MAF'] >= 0.05) & (df['Genotyped'] == 'Genotyped')]
 
-    print('Looking at Rsq and EmpRsq for genotyped snps')
-
-    print('\nMAF less than or equal to 0.05%')
-    printRsqEmpRsq(mafLess_0_05, countGeno)
-
-    print('\nMAF greater than 0.05%, less than 5%')
-    printRsqEmpRsq(maf_0_05_to_5, countGeno)
-
-    print('\nMAF greater than or equal to 5%')
-    printRsqEmpRsq(mafGreater_5, countGeno)
-    print()
-
+    printRsqEmpRsq(mafLess_0_05, countGeno, dict_out, 'MAF <= 0.05%')
+    printRsqEmpRsq(maf_0_05_to_5, countGeno, dict_out, 'MAF > 0.05% and < 5%')
+    printRsqEmpRsq(mafGreater_5, countGeno, dict_out, 'MAF >= 5%')
 
     #1.b
-    print('Correlation between Rsq and EmpRsq')
-    print(mafGreater_5[['Rsq', 'EmpRsq']].corr())
-    print()
+    corr = mafGreater_5[['Rsq', 'EmpRsq']].corr()
+    dict_out['genotyped snps']['correlation'] = round(corr.iloc[0,1], 4)
 
     mafGreater_5.plot.scatter(x='Rsq', y='EmpRsq', c='Red')
     plt.savefig('scatter_Genotypes.EmpRsq.Rsq_MAF_GT_5.png')
 
-    rsqCutoffs(mafGreater_5)
+    rsqCutoffs(mafGreater_5, dict_out, 'genotyped snps')
 
     #2
-    print('\nLooking at Rsq for ALL snps')
-
-    print('\nMAF less than or equal to 0.05%')
     AllMafLess_0_05 = df.loc[(df['MAF'] <= 0.0005)]
-    printRsq(AllMafLess_0_05, coutnTotal)
+    printRsq(AllMafLess_0_05, coutnTotal, dict_out,'MAF <= 0.05%')
 
-    print('\nMAF greater than 0.05%, less than 5%')
     AllMaf_0_05_to_5 = df.loc[(df['MAF'] > 0.0005) & (df['MAF'] < 0.05)]
-    printRsq(AllMaf_0_05_to_5, coutnTotal)
+    printRsq(AllMaf_0_05_to_5, coutnTotal, dict_out, 'MAF > 0.05% and < 5%')
 
-    print('\nMAF greater than or equal to 5%')
     AllMafGreater_5 = df.loc[(df['MAF'] >= 0.05)]
-    printRsq(AllMafGreater_5, coutnTotal)
-    print()
+    printRsq(AllMafGreater_5, coutnTotal, dict_out, 'MAF >= 5%')
 
     #3
-
     AllMafGreater_5[['Rsq']].plot(kind='hist', bins=100)
     plt.savefig('hist_ALL.Rsq_MAF_GT_5.png')
 
-    rsqCutoffs(AllMafGreater_5)
+    rsqCutoffs(AllMafGreater_5, dict_out, 'all snps')
 
-
-if __name__ == '__main__':
-    main()
+    return dict_out

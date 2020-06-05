@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/enc python3
 # Copyright Mathew Fischbach, Myers Lab http://csbio.cs.umn.edu/, 2020
 # code based on the work of Xiaotong Liu from Myers Lab
 
@@ -15,6 +15,12 @@ import sys
 import argparse
 import os
 import subprocess
+import json
+import csv
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
 
 startDir = os.getcwd()
 
@@ -47,11 +53,11 @@ def runCommandLine(commands):
 def checkPrograms():
     print('Checking required programs and directories')
     # set all programs used to the env PATH variable, except for beagle pre-phasing
-    if not os.path.isdir('analysis'):
-        print('directory "analysis" not found. Creating directory')
-        os.mkdir('analysis')
+    if not os.path.isdir('output'):
+        print('directory "output" not found. Creating directory')
+        os.mkdir('output')
         for i in range(1, 23):
-            os.mkdir('analysis/chr' + str(i))
+            os.mkdir('output/chr' + str(i))
         
     if not os.path.isdir('beforePhasing'):
         print('directory "beforePhasing" not found. Creating directory')
@@ -168,7 +174,7 @@ def convertRef(chr, cpu):
     print('\nBeginning reference file conversion to m3vcf')
     toCommandLine = ['Minimac3 --refHaps beforePhasing/ref/chr' + chr + '.recode.vcf \
         --processReference \
-        --prefix afterPhasing/ref/chr' + chr + ' --cpus ' + cpu + ' --rounds 5 --chr ' + chr]
+        --prefix afterPhasing/ref/chr' + chr + ' --cpus ' + cpu + ' --rounds 0 --chr ' + chr]
     runCommandLine(toCommandLine)
     print('Done converting ref file to minimac3 format')
     # outputs as .m3vcf.gz
@@ -178,21 +184,94 @@ def impute(chr, cpu):
     toCommandLine = ['minimac4 \
         --haps afterPhasing/tar/prePhasedChr' + chr + '.vcf.gz \
         --refHaps afterPhasing/ref/chr' + chr + '.m3vcf.gz \
-        --prefix afterPhasing/imputed_chr' + chr + '\
+        --prefix output/chr' + chr + ' \
         --referenceEstimates OFF \
         --mapFile map/genetic_map_hg38_withX.minimac.txt \
         --cpus ' + cpu]
     runCommandLine(toCommandLine)
     print('imputation using minimac4 - done')
 
-def compare(chr):
-    os.chdir('analysis/chr' + chr)
-    runCommandLine(['python3 ../../minimac_info_analysis.py ../../afterPhasing/imputed_chr' + chr + '.info \
-        > imputation_assessment.txt'])
-    os.chdir(startDir)
- 
-    # simply sends stdout to text file 
 
+def setUpCompare(infoFile):
+    # infoFile = sys.argv[1] # take in the .info file
+    df = pd.read_csv(infoFile, header=0, sep='\t')
+
+    df[['AvgCall','Rsq', 'LooRsq', 'EmpR', 'EmpRsq', 'Dose0', 'Dose1']] = \
+        df[['AvgCall', 'Rsq', 'LooRsq', 'EmpR', 'EmpRsq', 'Dose0', 'Dose1']].apply(pd.to_numeric, \
+        errors='coerce')
+
+    return df
+
+def printRsqEmpRsq(df, countGeno, dict_out, maf):
+    dict_out['genotyped snps'][maf]['Rsq'] = round(df['Rsq'].mean(), 4)
+    dict_out['genotyped snps'][maf]['EmpRsq'] = round(df['EmpRsq'].mean(), 4)
+    dict_out['genotyped snps'][maf]['Total snps'] = len(df.index)
+    ratio = len(df.index)/float(countGeno)
+    dict_out['genotyped snps'][maf]['Ratio of snps'] = round(ratio, 4)
+
+def rsqCutoffs(mafList, dict_out, type):
+    totalSNPs = len(mafList.index)
+    cutoffs = [0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 0.96, 0.97, 0.98, 0.99]
+    for val in cutoffs:
+        newMaf = mafList.loc[(mafList['Rsq'] >= val)]
+        newSnps = len(newMaf.index)
+        dict_out[type]['snp ratios at Rsq cutoff'][round(val,2)] = round(newSnps/float(totalSNPs),4)
+
+def printRsq(df, countTotal, dict_out, maf):
+    dict_out['all snps'][maf]['Rsq'] = round(df['Rsq'].mean(), 4)
+    dict_out['all snps'][maf]['Total snps'] = len(df.index)
+    ratio = len(df.index)/float(countTotal)
+    dict_out['all snps'][maf]['Ratio of snps'] = round(ratio, 4)
+
+
+def compare(infoFile, chr):
+    dict_out = {'genotyped snps': {'MAF <= 0.05%': {}, 'MAF > 0.05% and < 5%': {}, \
+        'MAF >= 5%': {}, 'correlation': None, 'snp ratios at Rsq cutoff': {}}, \
+            'all snps': {'MAF <= 0.05%': {}, 'MAF > 0.05% and < 5%': {}, 'MAF >= 5%': {}, \
+            'snp ratios at Rsq cutoff': {}}}
+    df = setUpCompare(infoFile)
+    countTotal = len(df.index)
+    genotypes = df.loc[(df['Genotyped'] == 'Genotyped')]
+    countGeno = len(genotypes.index)
+
+    #1.a
+    mafLess_0_05 = df.loc[(df['MAF'] <= 0.0005) & (df['Genotyped'] == 'Genotyped')]
+    maf_0_05_to_5 = df.loc[(df['MAF'] > 0.0005) & (df['MAF'] < 0.05) & (df['Genotyped'] == 'Genotyped')]
+    mafGreater_5 = df.loc[(df['MAF'] >= 0.05) & (df['Genotyped'] == 'Genotyped')]
+
+    printRsqEmpRsq(mafLess_0_05, countGeno, dict_out, 'MAF <= 0.05%')
+    printRsqEmpRsq(maf_0_05_to_5, countGeno, dict_out, 'MAF > 0.05% and < 5%')
+    printRsqEmpRsq(mafGreater_5, countGeno, dict_out, 'MAF >= 5%')
+
+    #1.b
+    corr = mafGreater_5[['Rsq', 'EmpRsq']].corr()
+    dict_out['genotyped snps']['correlation'] = round(corr.iloc[0,1], 4)
+
+    mafGreater_5.plot.scatter(x='Rsq', y='EmpRsq', c='Red')
+    plt.savefig('output/chr' + chr + '/scatter_Genotypes.EmpRsq.Rsq_MAF_GT_5.png')
+
+    rsqCutoffs(mafGreater_5, dict_out, 'genotyped snps')
+
+    #2
+    AllMafLess_0_05 = df.loc[(df['MAF'] <= 0.0005)]
+    printRsq(AllMafLess_0_05, countTotal, dict_out,'MAF <= 0.05%')
+
+    AllMaf_0_05_to_5 = df.loc[(df['MAF'] > 0.0005) & (df['MAF'] < 0.05)]
+    printRsq(AllMaf_0_05_to_5, countTotal, dict_out, 'MAF > 0.05% and < 5%')
+
+    AllMafGreater_5 = df.loc[(df['MAF'] >= 0.05)]
+    printRsq(AllMafGreater_5, countTotal, dict_out, 'MAF >= 5%')
+
+    #3
+    AllMafGreater_5[['Rsq']].plot(kind='hist', bins=100)
+    plt.savefig('output/chr' + chr + '/hist_ALL.Rsq_MAF_GT_5.png')
+
+    rsqCutoffs(AllMafGreater_5, dict_out, 'all snps')
+
+    return dict_out
+
+def unpackDict(dictIn):
+    pass
 
 
 ######################################################################################
@@ -200,141 +279,35 @@ def main():
     # Set up argument inputs
     targetFileName = ''
     refFileName = ''
-    cpus = 4
+    cpus = 1
+    analysisDict = {}
     targetFileName, refFileName, cpus = setUp(sys.argv[1:], targetFileName, refFileName, cpus)
-
     checkPrograms()
-    separateFile(targetFileName, 'tar')
-    separateFile(refFileName, 'ref')
+    # separateFile(targetFileName, 'tar')
+    # separateFile(refFileName, 'ref')
+    
     for i in range(1, 23):
         chromosome = str(i)
-        removeDuplicates(chromosome)
-        removeBadAllelesWithAWK(chromosome)
-        prePhase(chromosome, cpus)
-        convertRef(chromosome, cpus)
-        impute(chromosome, cpus)
-        compare(chromosome)
-
+        # removeDuplicates(chromosome)
+        # removeBadAllelesWithAWK(chromosome)
+        # prePhase(chromosome, cpus)
+        # convertRef(chromosome, cpus)
+        # impute(chromosome, cpus)
+        infoFile = 'output/chr' + chromosome + '/imputed_chr' + chromosome + '.info'
+        if os.path.isfile(infoFile):
+            analysisDict['chr' + chromosome] = compare(infoFile, chromosome)
+    with (open('analysis_output.csv', 'w')) as f:
+        writer = csv.writer(f)
+    for x in analysisDict:
+        for y in analysisDict[x]:
+            for z in analysisDict[x][y]:
+                writer.writerow(z)
+    # outJSON = json.dumps(analysisDict)
+    # with open('analysis_output.json', 'w') as f:
+    #     f.write(outJSON)
+        
 if __name__ == '__main__':
     main()
 
 # current testing input
-# python3 Minimac4ImputationAccuracy.py -t PD_NGRC_phs000196.GRCh38.chr1.vcf.gz -r ALL.chr1.shapeit2_integrated_v1a.GRCh38.20181129.phased.ver4.2.vcf.gz --cpus 10
-
-### Unused functions ###
-# def get1000Gen():
-    # if not os.path.isdir('1000Genome'):
-    #     print('1000Genome directory not, present. Creating directory')
-    #     os.mkdir('1000Genome')
-    #     os.chdir(startDir + '/1000Genome')
-    #     for chr in range(1,23):
-    #         runCommandLine(['wget http://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/1000_genomes_project/release/20190312_biallelic_SNV_and_INDEL/ALL.chr'\
-    #             + str(chr) + '.shapeit2_integrated_snvindels_v2a_27022019.GRCh38.phased.vcf.gz'])
-    #     os.chdir(startDir)
-    #     if not os.path.isdir('map'):
-    #         os.mkdir('map')
-    #         os.chdir(startDir + '/map')
-    #         print('getting GRCh38.map files')
-    #         runCommandLine(['wget http://bochet.gcc.biostat.washington.edu/beagle/genetic_maps/plink.GRCh38.map.zip'])
-    #         runCommandLine(['unzip plink.GRCh38.map.zip'])
-    #     os.chdir(startDir)
-
-#3.2 No need to mask because we are using Minimac4 with it's .info file. 
-# This function would need to be updated to work with an imputation program that does 
-# not have the capabilities of Minimac4
-# def maskTargetFile(chr):
-    # runCommandLine(['vcftools/bin/vcftools --vcf afterPhasing/tar/chr' + chr + '.vcf \
-    #     --freq --out afterPhasing/chr' + chr + '_to_mask'])
-
-    # position_list = []
-    # total = 0
-    # chromosome = 0
-    # with open('afterPhasing/chr' + chr + '_to_mask.frq') as f:
-    #     read_data = f.readlines()
-    #     for line in read_data: 
-    #         words = line.split('\t')
-    #         total += 1
-    #         chromosome = words[0]
-    #         position_list.append(words[1])
-
-    # random_list = position_list
-    # deleted_list = []
-    # masked_number = 1000  # can also make it a percentage of total
-
-    # i = 0
-    # while i < masked_number:
-    #     position = random.choice(random_list)
-    #     deleted_list.append(position)
-    #     random_list.remove(position)
-    #     i += 1
-    # deleted_list.sort()
-    # print(deleted_list[0])
-
-    # print('\ntotal number of snps: ' + str(total))
-    # print('number of masked snps: ' + str(len(deleted_list)))
-    # print('number of snps after masking: ' + str(len(random_list)) + '\n')
-
-    # with open('afterPhasing/snps_after_masking.txt', 'w') as snps_after_mask:
-    #     for j in random_list:
-    #         temp_string1 = chromosome + '\t' + j + '\n'
-    #         snps_after_mask.write(temp_string1)
-
-    # with open('afterPhasing/snps_that_are_masked.txt', 'w') as snps_that_are_masked:
-    #     for k in deleted_list:
-    #         temp_string2 = chromosome + '\t' + k + '\n'
-    #         snps_that_are_masked.write(temp_string2)
-
-    # print("\ngathering of snps to create a randomly masked file and real file - done")
-
-    # toCommandLine = ['vcftools/bin/vcftools --gzvcf ' + targetFileName + \
-    #     ' --positions afterPhasing/snps_that_are_masked.txt --recode \
-    #         --out afterPhasing/masked_snps_to_compare']
-    # runCommandLine(toCommandLine)
-
-    # runCommandLine(['gzip afterPhasing/masked_snps_to_compare.recode.vcf'])
-    # print('\nreal snp mask file to compare - done')
-
-    # toCommandLine = ['vcftools/bin/vcftools --gzvcf ' + targetFileName + \
-    #     ' --positions afterPhasing/snps_after_masking.txt --recode \
-    #         --out afterPhasing/snps_to_be_imputed']
-    # runCommandLine(toCommandLine)
-
-    # runCommandLine(['gzip afterPhasing/snps_to_be_imputed.recode.vcf'])
-    # print('\nmasked snps to impute - done')
-
-# def removeBadAlleles(chr): 
-    # # takes snps from target and ref file and creates a new ref file from 1000Genome
-    # print('finding list of snps from given target and reference files')
-    # toCommandLine = ['vcftools \
-    #     --vcf beforePhasing/tar/chr' + chr + '.noDups.vcf \
-    #     --diff beforePhasing/tar/chr' + chr + '.noDups.vcf \
-    #     --diff-site --out beforePhasing/snpPositionChr' + chr]
-    # runCommandLine(toCommandLine) 
-
-    # # create list of snps while removing poorly coded alleles 
-    # # this is based off of personal experience. This can easily be changed
-    # print('\nRemoving wrongly coded alleles')
-    # snp_list = []
-    # count = 0
-    # with open('beforePhasing/snpPositionChr' + chr + '.diff.sites_in_files') as f:
-    #     read_data = f.readlines()
-    #     for i in range(1, len(read_data)): # skip header line
-    #         words = read_data[i].split('\t')
-    #         # Change the logic to check for: if not A, C, G, T, ., *?
-    #         if words[4] == 'I' or words[5] == 'I' or words[6] == 'I' or words[7] == 'I' or \
-    #             words[4] == 'D' or words[5] == 'D' or words[6] == 'D' or words[7] == 'D':
-    #             count += 1
-    #             string = words[0] + '\t' + words[2] + '\n'
-    #             snp_list.append(string)
-
-    # print('Removing {snps} snps'.format(snps = count))
-    # # create text file of positions
-    # fileSNP = open('beforePhasing/snpPositionsToRemoveChr' + chr + '.txt', 'w')
-    # fileSNP.writelines(snp_list)
-    # fileSNP.close()
-    # # why dont I exlude-positions? maybe a time saver. currently does 158 seconds
-    # print('Creating new target file removed of bad alleles')
-    # runCommandLine(['vcftools --vcf beforePhasing/tar/chr' + chr + '.noDups.vcf \
-    #     --exclude-positions beforePhasing/snpPositionsToRemoveChr' + chr + '.txt \
-    #     --recode \
-    #     --out beforePhasing/tar/chr' + chr])
+# python Minimac4ImputationAccuracy.py -t PD_NGRC_phs000196.GRCh38.chr1.vcf.gz -r ALL.chr1.shapeit2_integrated_v1a.GRCh38.20181129.phased.ver4.2.vcf.gz --cpus 10
