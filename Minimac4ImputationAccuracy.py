@@ -6,7 +6,6 @@
 # This program will take GWAS vcf files and impute them with Minimac4.
 # An analysis of the imputation accuracy is performed.
 
-
 import sys
 import argparse
 import os
