@@ -27,7 +27,7 @@ def setUp(argv, targetFileName, refFileName, cpus):
     parser.add_argument(
         '-r', '--ref', required=True, help='reference dataset as vcf.gz')
     parser.add_argument(
-        '--cpus', type=str, default='4', help='number of threads to use')
+        '-c', '--cpus', type=str, default='4', help='number of threads to use')
     args = parser.parse_args()
 
     print('Successful input\n')
@@ -152,12 +152,11 @@ def removeDuplicates(chr):
     print('Beginning to remove duplicate entries')
     runCommandLine(['vcfuniq beforePhasing/tar/chr' + chr + '.vcf > \
         beforePhasing/tar/chr' + chr + '.noDups.vcf'])
-    print('Done, duplicate entries removed\n')
 
 
 def removeBadAllelesWithAWK(chr):
     # limits REF to ACTG and ALT to .ACTG
-    print('Creating new target file removed of bad alleles')
+    print('Removing bad alleles')
     toCommandLine = ["awk '$1 ~ /^#/ {print $0;next} {if ($4 ~ /A|C|T|G/ && \
     $5 ~ /.|A|C|T|G/) print $0}' beforePhasing/tar/chr" + chr + ".noDups.vcf \
     > beforePhasing/tar/chr" + chr + ".prephaseReady.vcf"]
@@ -167,19 +166,19 @@ def removeBadAllelesWithAWK(chr):
 def prePhase(chr, cpu):
     # Beagle pre-phasing, limited by how many cpus are used
     print('beginning prephasing with beagle')
-    toCommandLine = ['java -jar beagle.27Apr20.b81.jar gt=beforePhasing/tar/chr\
-        ' + chr + '.prephaseReady.vcf out=afterPhasing/tar/prePhasedChr\
-        ' + chr + ' iterations=20 map=map/plink.chr' + chr + '.GRCh38.map \
-        chrom=' + chr + ' nthreads=' + cpu]
+    toCommandLine = ['java -jar beagle.27Apr20.b81.jar gt=beforePhasing/tar/chr'
+    + chr + '.prephaseReady.vcf out=afterPhasing/tar/prePhasedChr'
+    + chr + ' iterations=20 map=map/plink.chr' + chr + '.GRCh38.map chrom='
+    + chr + ' nthreads=' + cpu]
     runCommandLine(toCommandLine)
 
 
 def convertRef(chr, cpu):
     # Uses Minimac3 to convert a vcf reference file to m3vcf format
     print('\nBeginning reference file conversion to m3vcf')
-    toCommandLine = ['Minimac3 --refHaps beforePhasing/ref/chr' + chr + '\
-        .recode.vcf --processReference --prefix afterPhasing/ref/chr' + chr + '\
-         --cpus ' + cpu + ' --rounds 0 --chr ' + chr]
+    toCommandLine = ['Minimac3 --refHaps beforePhasing/ref/chr'
+    + chr + '.recode.vcf --processReference --prefix afterPhasing/ref/chr'
+    + chr + '--cpus ' + cpu + ' --rounds 0 --chr ' + chr]
     runCommandLine(toCommandLine)
     print('Done converting ref file to minimac3 format')
 
