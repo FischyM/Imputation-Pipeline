@@ -31,7 +31,8 @@ git clone https://github.com/FischyM/Imputation-Pipeline.git
 Decompress the genetic map files in the map directory.
 
 ```Bash
-tar -xvzf map/genetic_maps.b38.tar.gz
+cd map/
+tar -xvzf genetic_maps.b38.tar.gz
 ```
 
 To see the usage statement, run the program with the '-h' flag.
