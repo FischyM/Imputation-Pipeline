@@ -1,0 +1,7 @@
+output/
+afterPhasing/
+beforePhasing/
+OLD*/
+masking/
+map/chr*
+map/convert*
